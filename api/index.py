@@ -1,61 +1,29 @@
 #!/usr/bin/env python3
 """
 Vercel serverless function for Image Quality Analysis API
+Simplified version without OpenCV for better Vercel compatibility
 """
 
 import sys
 import os
+import base64
+import io
+import time
+import math
 
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import cv2
-import numpy as np
-import base64
-import io
 from PIL import Image
-import time
-
-# Simple quality check function for Vercel
-def optimized_quality_check(img_input, resize_dim=(300, 300)):
-    """Simple image quality check optimized for Vercel"""
-    if img_input is None:
-        return 100.0, "Bad", 0.0
-    
-    try:
-        # Resize image for faster processing
-        img_resized = cv2.resize(img_input, resize_dim, interpolation=cv2.INTER_AREA)
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
-        
-        # Calculate Laplacian variance (sharpness)
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        
-        # Calculate noise level
-        noise = np.std(gray)
-        
-        # Calculate contrast
-        contrast = np.std(gray)
-        
-        # Simple quality scoring
-        if laplacian_var > 200 and noise < 30:
-            return 15.0, "Good", 0.001
-        elif laplacian_var > 100 and noise < 50:
-            return 35.0, "Moderate", 0.001
-        else:
-            return 55.0, "Bad", 0.001
-            
-    except Exception as e:
-        return 100.0, "Error", 0.0
+import numpy as np
 
 app = Flask(__name__)
 CORS(app)
 
 def base64_to_image(base64_string):
-    """Convert base64 string to OpenCV image"""
+    """Convert base64 string to PIL Image"""
     try:
         # Remove data URL prefix if present
         if ',' in base64_string:
@@ -67,12 +35,116 @@ def base64_to_image(base64_string):
         # Convert to PIL Image
         pil_image = Image.open(io.BytesIO(image_data))
         
-        # Convert to OpenCV format (BGR)
-        opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-        
-        return opencv_image
+        return pil_image
     except Exception as e:
         raise ValueError(f"Invalid image data: {str(e)}")
+
+def simple_quality_check(image, resize_dim=(300, 300)):
+    """Simple image quality check using PIL only"""
+    try:
+        # Resize image for faster processing
+        image_resized = image.resize(resize_dim, Image.Resampling.LANCZOS)
+        
+        # Convert to grayscale
+        gray_image = image_resized.convert('L')
+        
+        # Convert to numpy array
+        img_array = np.array(gray_image)
+        
+        # Calculate basic quality metrics
+        
+        # 1. Sharpness (using Laplacian-like calculation)
+        def calculate_sharpness(img):
+            # Simple edge detection using differences
+            h, w = img.shape
+            sharpness = 0
+            for i in range(1, h-1):
+                for j in range(1, w-1):
+                    # Calculate gradient magnitude
+                    gx = abs(int(img[i, j+1]) - int(img[i, j-1]))
+                    gy = abs(int(img[i+1, j]) - int(img[i-1, j]))
+                    sharpness += math.sqrt(gx*gx + gy*gy)
+            return sharpness / ((h-2) * (w-2))
+        
+        sharpness = calculate_sharpness(img_array)
+        
+        # 2. Contrast (standard deviation)
+        contrast = float(np.std(img_array))
+        
+        # 3. Brightness (mean)
+        brightness = float(np.mean(img_array))
+        
+        # 4. Noise estimation (local variance)
+        def estimate_noise(img):
+            h, w = img.shape
+            noise = 0
+            count = 0
+            for i in range(1, h-1):
+                for j in range(1, w-1):
+                    # Local 3x3 variance
+                    local_patch = img[i-1:i+2, j-1:j+2]
+                    local_var = np.var(local_patch)
+                    noise += local_var
+                    count += 1
+            return noise / count if count > 0 else 0
+        
+        noise_level = estimate_noise(img_array)
+        
+        # Quality scoring based on metrics
+        # Higher sharpness and contrast = better quality
+        # Lower noise = better quality
+        
+        quality_score = 0
+        
+        # Sharpness contribution (0-40 points)
+        if sharpness > 50:
+            quality_score += 40
+        elif sharpness > 30:
+            quality_score += 30
+        elif sharpness > 20:
+            quality_score += 20
+        else:
+            quality_score += 10
+        
+        # Contrast contribution (0-30 points)
+        if contrast > 40:
+            quality_score += 30
+        elif contrast > 25:
+            quality_score += 20
+        elif contrast > 15:
+            quality_score += 15
+        else:
+            quality_score += 5
+        
+        # Noise penalty (0-30 points deducted)
+        if noise_level < 10:
+            quality_score += 0  # No penalty
+        elif noise_level < 20:
+            quality_score += 10  # Small penalty
+        elif noise_level < 40:
+            quality_score += 20  # Medium penalty
+        else:
+            quality_score += 30  # Large penalty
+        
+        # Brightness check (penalty for too dark or too bright)
+        if brightness < 30 or brightness > 220:
+            quality_score += 15  # Penalty for poor brightness
+        
+        # Normalize score to 0-100 range
+        quality_score = max(0, min(100, quality_score))
+        
+        # Determine category
+        if quality_score < 30:
+            category = "Good"
+        elif quality_score < 60:
+            category = "Moderate"
+        else:
+            category = "Bad"
+        
+        return quality_score, category, 0.001  # Very fast processing time
+        
+    except Exception as e:
+        return 100.0, "Error", 0.0
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -81,7 +153,8 @@ def health_check():
         'status': 'healthy',
         'service': 'Image Quality Analysis API',
         'version': '1.0.0',
-        'platform': 'Vercel'
+        'platform': 'Vercel',
+        'method': 'PIL-only'
     })
 
 @app.route('/analyze-single', methods=['POST'])
@@ -101,7 +174,7 @@ def analyze_single_image():
         
         # Analyze image quality
         start_time = time.time()
-        score, category, processing_time = optimized_quality_check(image)
+        score, category, processing_time = simple_quality_check(image)
         total_time = time.time() - start_time
         
         return jsonify({
@@ -139,10 +212,10 @@ def analyze_batch_images():
             }), 400
         
         # Limit batch size for Vercel
-        if len(images_data) > 10:
+        if len(images_data) > 5:
             return jsonify({
                 'success': False,
-                'error': 'Maximum 10 images allowed per batch'
+                'error': 'Maximum 5 images allowed per batch'
             }), 400
         
         results = []
@@ -158,7 +231,7 @@ def analyze_batch_images():
                 
                 # Analyze image quality
                 start_time = time.time()
-                score, category, processing_time = optimized_quality_check(image)
+                score, category, processing_time = simple_quality_check(image)
                 total_time = time.time() - start_time
                 
                 results.append({
