@@ -17,7 +17,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
-import numpy as np
 
 app = Flask(__name__)
 CORS(app)
@@ -48,47 +47,60 @@ def simple_quality_check(image, resize_dim=(300, 300)):
         # Convert to grayscale
         gray_image = image_resized.convert('L')
         
-        # Convert to numpy array
-        img_array = np.array(gray_image)
+        # Convert to list of pixels for processing
+        pixels = list(gray_image.getdata())
+        width, height = gray_image.size
         
-        # Calculate basic quality metrics
+        # Calculate basic quality metrics using PIL only
         
-        # 1. Sharpness (using Laplacian-like calculation)
-        def calculate_sharpness(img):
-            # Simple edge detection using differences
-            h, w = img.shape
+        # 1. Sharpness (using edge detection)
+        def calculate_sharpness(pixels, width, height):
             sharpness = 0
-            for i in range(1, h-1):
-                for j in range(1, w-1):
+            count = 0
+            for y in range(1, height-1):
+                for x in range(1, width-1):
                     # Calculate gradient magnitude
-                    gx = abs(int(img[i, j+1]) - int(img[i, j-1]))
-                    gy = abs(int(img[i+1, j]) - int(img[i-1, j]))
+                    center = pixels[y * width + x]
+                    right = pixels[y * width + (x+1)]
+                    left = pixels[y * width + (x-1)]
+                    down = pixels[(y+1) * width + x]
+                    up = pixels[(y-1) * width + x]
+                    
+                    gx = abs(right - left)
+                    gy = abs(down - up)
                     sharpness += math.sqrt(gx*gx + gy*gy)
-            return sharpness / ((h-2) * (w-2))
+                    count += 1
+            return sharpness / count if count > 0 else 0
         
-        sharpness = calculate_sharpness(img_array)
+        sharpness = calculate_sharpness(pixels, width, height)
         
         # 2. Contrast (standard deviation)
-        contrast = float(np.std(img_array))
+        mean_val = sum(pixels) / len(pixels)
+        variance = sum((p - mean_val) ** 2 for p in pixels) / len(pixels)
+        contrast = math.sqrt(variance)
         
         # 3. Brightness (mean)
-        brightness = float(np.mean(img_array))
+        brightness = mean_val
         
-        # 4. Noise estimation (local variance)
-        def estimate_noise(img):
-            h, w = img.shape
+        # 4. Noise estimation (simplified)
+        def estimate_noise(pixels, width, height):
             noise = 0
             count = 0
-            for i in range(1, h-1):
-                for j in range(1, w-1):
+            for y in range(1, height-1):
+                for x in range(1, width-1):
                     # Local 3x3 variance
-                    local_patch = img[i-1:i+2, j-1:j+2]
-                    local_var = np.var(local_patch)
+                    local_pixels = []
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            local_pixels.append(pixels[(y+dy) * width + (x+dx)])
+                    
+                    local_mean = sum(local_pixels) / len(local_pixels)
+                    local_var = sum((p - local_mean) ** 2 for p in local_pixels) / len(local_pixels)
                     noise += local_var
                     count += 1
             return noise / count if count > 0 else 0
         
-        noise_level = estimate_noise(img_array)
+        noise_level = estimate_noise(pixels, width, height)
         
         # Quality scoring based on metrics
         # Higher sharpness and contrast = better quality
@@ -263,13 +275,18 @@ def analyze_batch_images():
             if result['success']:
                 category_distribution[result['category']] += 1
         
+        # Calculate statistics without numpy
+        avg_score = sum(scores) / len(scores) if scores else 0
+        best_score = min(scores) if scores else 0
+        worst_score = max(scores) if scores else 0
+        
         summary = {
             'total_images': len(images_data),
             'successful_analyses': successful_analyses,
             'failed_analyses': failed_analyses,
-            'average_score': float(np.mean(scores)) if scores else 0,
-            'best_score': float(np.min(scores)) if scores else 0,
-            'worst_score': float(np.max(scores)) if scores else 0,
+            'average_score': float(avg_score),
+            'best_score': float(best_score),
+            'worst_score': float(worst_score),
             'category_distribution': category_distribution,
             'total_processing_time': float(total_processing_time)
         }
