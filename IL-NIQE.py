@@ -2,7 +2,7 @@ import cv2
 import math
 import numpy as np
 import os
-from scipy.ndimage.filters import convolve
+from scipy.ndimage import convolve
 from scipy.signal import convolve2d
 from scipy.special import gamma
 from scipy.ndimage import correlate
