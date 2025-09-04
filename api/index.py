@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """
 Image Quality Analysis API for Vercel
-Zero-configuration deployment compatible
+Using simple HTTP handler instead of Flask for better compatibility
 """
 
+import json
 import base64
 import io
 import time
 import math
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from http.server import BaseHTTPRequestHandler
 from PIL import Image
-
-app = Flask(__name__)
-CORS(app)
 
 def base64_to_image(base64_string):
     """Convert base64 string to PIL Image"""
@@ -111,159 +108,223 @@ def simple_quality_check(image, resize_dim=(200, 200)):
     except Exception as e:
         return 100.0, "Error", 0.0
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'Image Quality Analysis API',
-        'version': '2.0.0',
-        'platform': 'Vercel',
-        'method': 'PIL-only'
-    })
-
-@app.route('/analyze-single', methods=['POST'])
-def analyze_single_image():
-    """Analyze single image quality"""
-    try:
-        data = request.get_json()
-        
-        if not data or 'image' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'No image data provided'
-            }), 400
-        
-        # Convert base64 to image
-        image = base64_to_image(data['image'])
-        
-        # Analyze image quality
-        start_time = time.time()
-        score, category, processing_time = simple_quality_check(image)
-        total_time = time.time() - start_time
-        
-        return jsonify({
-            'success': True,
-            'quality_score': float(score),
-            'category': category,
-            'processing_time': float(processing_time),
-            'total_time': float(total_time),
-            'timestamp': time.time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-@app.route('/analyze-batch', methods=['POST'])
-def analyze_batch_images():
-    """Analyze multiple images in batch"""
-    try:
-        data = request.get_json()
-        
-        if not data or 'images' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'No images data provided'
-            }), 400
-        
-        images_data = data['images']
-        if not isinstance(images_data, list) or len(images_data) == 0:
-            return jsonify({
-                'success': False,
-                'error': 'Images must be a non-empty array'
-            }), 400
-        
-        # Limit batch size for Vercel
-        if len(images_data) > 3:
-            return jsonify({
-                'success': False,
-                'error': 'Maximum 3 images allowed per batch'
-            }), 400
-        
-        results = []
-        total_processing_time = 0
-        successful_analyses = 0
-        failed_analyses = 0
-        scores = []
-        
-        for i, image_data in enumerate(images_data):
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            response = {
+                'status': 'healthy',
+                'service': 'Image Quality Analysis API',
+                'version': '3.0.0',
+                'platform': 'Vercel',
+                'method': 'HTTP Handler'
+            }
+            
+            self.wfile.write(json.dumps(response).encode())
+        else:
+            self.send_response(404)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'Not found'}).encode())
+    
+    def do_POST(self):
+        if self.path == '/analyze-single':
             try:
+                # Read request body
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                
+                # Parse JSON
+                data = json.loads(post_data.decode('utf-8'))
+                
+                if not data or 'image' not in data:
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'No image data provided'
+                    }).encode())
+                    return
+                
                 # Convert base64 to image
-                image = base64_to_image(image_data)
+                image = base64_to_image(data['image'])
                 
                 # Analyze image quality
                 start_time = time.time()
                 score, category, processing_time = simple_quality_check(image)
                 total_time = time.time() - start_time
                 
-                results.append({
-                    'index': i,
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                
+                response = {
+                    'success': True,
                     'quality_score': float(score),
                     'category': category,
                     'processing_time': float(processing_time),
-                    'success': True
-                })
+                    'total_time': float(total_time),
+                    'timestamp': time.time()
+                }
                 
-                scores.append(float(score))
-                total_processing_time += processing_time
-                successful_analyses += 1
+                self.wfile.write(json.dumps(response).encode())
                 
             except Exception as e:
-                results.append({
-                    'index': i,
-                    'quality_score': 0,
-                    'category': 'Error',
-                    'processing_time': 0,
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
                     'success': False,
                     'error': str(e)
-                })
-                failed_analyses += 1
+                }).encode())
         
-        # Calculate summary
-        category_distribution = {'Good': 0, 'Moderate': 0, 'Bad': 0}
-        for result in results:
-            if result['success']:
-                category_distribution[result['category']] += 1
+        elif self.path == '/analyze-batch':
+            try:
+                # Read request body
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                
+                # Parse JSON
+                data = json.loads(post_data.decode('utf-8'))
+                
+                if not data or 'images' not in data:
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'No images data provided'
+                    }).encode())
+                    return
+                
+                images_data = data['images']
+                if not isinstance(images_data, list) or len(images_data) == 0:
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'Images must be a non-empty array'
+                    }).encode())
+                    return
+                
+                # Limit batch size for Vercel
+                if len(images_data) > 3:
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'Maximum 3 images allowed per batch'
+                    }).encode())
+                    return
+                
+                results = []
+                total_processing_time = 0
+                successful_analyses = 0
+                failed_analyses = 0
+                scores = []
+                
+                for i, image_data in enumerate(images_data):
+                    try:
+                        # Convert base64 to image
+                        image = base64_to_image(image_data)
+                        
+                        # Analyze image quality
+                        start_time = time.time()
+                        score, category, processing_time = simple_quality_check(image)
+                        total_time = time.time() - start_time
+                        
+                        results.append({
+                            'index': i,
+                            'quality_score': float(score),
+                            'category': category,
+                            'processing_time': float(processing_time),
+                            'success': True
+                        })
+                        
+                        scores.append(float(score))
+                        total_processing_time += processing_time
+                        successful_analyses += 1
+                        
+                    except Exception as e:
+                        results.append({
+                            'index': i,
+                            'quality_score': 0,
+                            'category': 'Error',
+                            'processing_time': 0,
+                            'success': False,
+                            'error': str(e)
+                        })
+                        failed_analyses += 1
+                
+                # Calculate summary
+                category_distribution = {'Good': 0, 'Moderate': 0, 'Bad': 0}
+                for result in results:
+                    if result['success']:
+                        category_distribution[result['category']] += 1
+                
+                # Calculate statistics
+                avg_score = sum(scores) / len(scores) if scores else 0
+                best_score = min(scores) if scores else 0
+                worst_score = max(scores) if scores else 0
+                
+                summary = {
+                    'total_images': len(images_data),
+                    'successful_analyses': successful_analyses,
+                    'failed_analyses': failed_analyses,
+                    'average_score': float(avg_score),
+                    'best_score': float(best_score),
+                    'worst_score': float(worst_score),
+                    'category_distribution': category_distribution,
+                    'total_processing_time': float(total_processing_time)
+                }
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                
+                response = {
+                    'success': True,
+                    'results': results,
+                    'summary': summary,
+                    'timestamp': time.time()
+                }
+                
+                self.wfile.write(json.dumps(response).encode())
+                
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'success': False,
+                    'error': str(e)
+                }).encode())
         
-        # Calculate statistics
-        avg_score = sum(scores) / len(scores) if scores else 0
-        best_score = min(scores) if scores else 0
-        worst_score = max(scores) if scores else 0
-        
-        summary = {
-            'total_images': len(images_data),
-            'successful_analyses': successful_analyses,
-            'failed_analyses': failed_analyses,
-            'average_score': float(avg_score),
-            'best_score': float(best_score),
-            'worst_score': float(worst_score),
-            'category_distribution': category_distribution,
-            'total_processing_time': float(total_processing_time)
-        }
-        
-        return jsonify({
-            'success': True,
-            'results': results,
-            'summary': summary,
-            'timestamp': time.time()
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Endpoint not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({'error': 'Internal server error'}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True)
+        else:
+            self.send_response(404)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'Endpoint not found'}).encode())
+    
+    def do_OPTIONS(self):
+        # Handle CORS preflight requests
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
