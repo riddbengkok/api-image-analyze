@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 """
-Vercel serverless function for Image Quality Analysis API
-Simplified version without OpenCV for better Vercel compatibility
+Simple Image Quality Analysis API for Vercel
+Optimized for serverless deployment
 """
 
-import sys
-import os
 import base64
 import io
 import time
 import math
-
-# Add current directory to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
@@ -38,7 +32,7 @@ def base64_to_image(base64_string):
     except Exception as e:
         raise ValueError(f"Invalid image data: {str(e)}")
 
-def simple_quality_check(image, resize_dim=(300, 300)):
+def simple_quality_check(image, resize_dim=(200, 200)):
     """Simple image quality check using PIL only"""
     try:
         # Resize image for faster processing
@@ -47,102 +41,61 @@ def simple_quality_check(image, resize_dim=(300, 300)):
         # Convert to grayscale
         gray_image = image_resized.convert('L')
         
-        # Convert to list of pixels for processing
+        # Get pixel data
         pixels = list(gray_image.getdata())
         width, height = gray_image.size
         
-        # Calculate basic quality metrics using PIL only
+        # Calculate basic metrics
         
-        # 1. Sharpness (using edge detection)
-        def calculate_sharpness(pixels, width, height):
-            sharpness = 0
-            count = 0
-            for y in range(1, height-1):
-                for x in range(1, width-1):
-                    # Calculate gradient magnitude
-                    center = pixels[y * width + x]
-                    right = pixels[y * width + (x+1)]
-                    left = pixels[y * width + (x-1)]
-                    down = pixels[(y+1) * width + x]
-                    up = pixels[(y-1) * width + x]
-                    
-                    gx = abs(right - left)
-                    gy = abs(down - up)
-                    sharpness += math.sqrt(gx*gx + gy*gy)
-                    count += 1
-            return sharpness / count if count > 0 else 0
-        
-        sharpness = calculate_sharpness(pixels, width, height)
+        # 1. Brightness (mean)
+        brightness = sum(pixels) / len(pixels)
         
         # 2. Contrast (standard deviation)
-        mean_val = sum(pixels) / len(pixels)
-        variance = sum((p - mean_val) ** 2 for p in pixels) / len(pixels)
+        variance = sum((p - brightness) ** 2 for p in pixels) / len(pixels)
         contrast = math.sqrt(variance)
         
-        # 3. Brightness (mean)
-        brightness = mean_val
+        # 3. Sharpness (simplified edge detection)
+        sharpness = 0
+        count = 0
+        for y in range(1, height-1):
+            for x in range(1, width-1):
+                center = pixels[y * width + x]
+                right = pixels[y * width + (x+1)]
+                down = pixels[(y+1) * width + x]
+                
+                gx = abs(right - center)
+                gy = abs(down - center)
+                sharpness += math.sqrt(gx*gx + gy*gy)
+                count += 1
         
-        # 4. Noise estimation (simplified)
-        def estimate_noise(pixels, width, height):
-            noise = 0
-            count = 0
-            for y in range(1, height-1):
-                for x in range(1, width-1):
-                    # Local 3x3 variance
-                    local_pixels = []
-                    for dy in [-1, 0, 1]:
-                        for dx in [-1, 0, 1]:
-                            local_pixels.append(pixels[(y+dy) * width + (x+dx)])
-                    
-                    local_mean = sum(local_pixels) / len(local_pixels)
-                    local_var = sum((p - local_mean) ** 2 for p in local_pixels) / len(local_pixels)
-                    noise += local_var
-                    count += 1
-            return noise / count if count > 0 else 0
+        sharpness = sharpness / count if count > 0 else 0
         
-        noise_level = estimate_noise(pixels, width, height)
-        
-        # Quality scoring based on metrics
-        # Higher sharpness and contrast = better quality
-        # Lower noise = better quality
-        
+        # 4. Simple quality scoring
         quality_score = 0
         
-        # Sharpness contribution (0-40 points)
-        if sharpness > 50:
-            quality_score += 40
-        elif sharpness > 30:
-            quality_score += 30
-        elif sharpness > 20:
+        # Brightness check (penalty for too dark or too bright)
+        if 50 <= brightness <= 200:
             quality_score += 20
-        else:
+        elif 30 <= brightness <= 220:
             quality_score += 10
         
-        # Contrast contribution (0-30 points)
-        if contrast > 40:
+        # Contrast contribution
+        if contrast > 30:
             quality_score += 30
-        elif contrast > 25:
+        elif contrast > 20:
             quality_score += 20
-        elif contrast > 15:
-            quality_score += 15
-        else:
-            quality_score += 5
+        elif contrast > 10:
+            quality_score += 10
         
-        # Noise penalty (0-30 points deducted)
-        if noise_level < 10:
-            quality_score += 0  # No penalty
-        elif noise_level < 20:
-            quality_score += 10  # Small penalty
-        elif noise_level < 40:
-            quality_score += 20  # Medium penalty
-        else:
-            quality_score += 30  # Large penalty
+        # Sharpness contribution
+        if sharpness > 20:
+            quality_score += 30
+        elif sharpness > 15:
+            quality_score += 20
+        elif sharpness > 10:
+            quality_score += 10
         
-        # Brightness check (penalty for too dark or too bright)
-        if brightness < 30 or brightness > 220:
-            quality_score += 15  # Penalty for poor brightness
-        
-        # Normalize score to 0-100 range
+        # Normalize to 0-100 range
         quality_score = max(0, min(100, quality_score))
         
         # Determine category
@@ -153,7 +106,7 @@ def simple_quality_check(image, resize_dim=(300, 300)):
         else:
             category = "Bad"
         
-        return quality_score, category, 0.001  # Very fast processing time
+        return quality_score, category, 0.001
         
     except Exception as e:
         return 100.0, "Error", 0.0
@@ -164,7 +117,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'Image Quality Analysis API',
-        'version': '1.0.0',
+        'version': '2.0.0',
         'platform': 'Vercel',
         'method': 'PIL-only'
     })
@@ -224,10 +177,10 @@ def analyze_batch_images():
             }), 400
         
         # Limit batch size for Vercel
-        if len(images_data) > 5:
+        if len(images_data) > 3:
             return jsonify({
                 'success': False,
-                'error': 'Maximum 5 images allowed per batch'
+                'error': 'Maximum 3 images allowed per batch'
             }), 400
         
         results = []
@@ -275,7 +228,7 @@ def analyze_batch_images():
             if result['success']:
                 category_distribution[result['category']] += 1
         
-        # Calculate statistics without numpy
+        # Calculate statistics
         avg_score = sum(scores) / len(scores) if scores else 0
         best_score = min(scores) if scores else 0
         worst_score = max(scores) if scores else 0
