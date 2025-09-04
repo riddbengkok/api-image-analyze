@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple Image Quality Analysis API for Vercel
-Optimized for serverless deployment
+Image Quality Analysis API for Vercel
+Zero-configuration deployment compatible
 """
 
 import base64
@@ -264,10 +264,6 @@ def not_found(error):
 @app.errorhandler(500)
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
-
-# Vercel serverless function handler
-def handler(request):
-    return app(request.environ, lambda *args: None)
 
 if __name__ == '__main__':
     app.run(debug=True)
