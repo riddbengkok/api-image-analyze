@@ -18,26 +18,38 @@ import io
 from PIL import Image
 import time
 
-# Import the optimized quality check function
-try:
-    from optimized_quality_check import optimized_quality_check
-except ImportError:
-    # Fallback for Vercel deployment
-    def optimized_quality_check(img_input, resize_dim=(300, 300)):
-        # Simple fallback implementation
-        if img_input is None:
-            return 100.0, "Bad", 0.0
+# Simple quality check function for Vercel
+def optimized_quality_check(img_input, resize_dim=(300, 300)):
+    """Simple image quality check optimized for Vercel"""
+    if img_input is None:
+        return 100.0, "Bad", 0.0
+    
+    try:
+        # Resize image for faster processing
+        img_resized = cv2.resize(img_input, resize_dim, interpolation=cv2.INTER_AREA)
         
-        # Basic quality check
-        gray = cv2.cvtColor(img_input, cv2.COLOR_BGR2GRAY)
+        # Convert to grayscale
+        gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+        
+        # Calculate Laplacian variance (sharpness)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         
-        if laplacian_var > 100:
-            return 20.0, "Good", 0.001
-        elif laplacian_var > 50:
-            return 40.0, "Moderate", 0.001
+        # Calculate noise level
+        noise = np.std(gray)
+        
+        # Calculate contrast
+        contrast = np.std(gray)
+        
+        # Simple quality scoring
+        if laplacian_var > 200 and noise < 30:
+            return 15.0, "Good", 0.001
+        elif laplacian_var > 100 and noise < 50:
+            return 35.0, "Moderate", 0.001
         else:
-            return 60.0, "Bad", 0.001
+            return 55.0, "Bad", 0.001
+            
+    except Exception as e:
+        return 100.0, "Error", 0.0
 
 app = Flask(__name__)
 CORS(app)
