@@ -119,7 +119,7 @@ class handler(BaseHTTPRequestHandler):
             response = {
                 'status': 'healthy',
                 'service': 'Image Quality Analysis API',
-                'version': '3.0.0',
+                'version': '3.0.1',
                 'platform': 'Vercel',
                 'method': 'HTTP Handler'
             }
