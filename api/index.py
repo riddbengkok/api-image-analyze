@@ -95,13 +95,13 @@ def simple_quality_check(image, resize_dim=(200, 200)):
         # Normalize to 0-100 range
         quality_score = max(0, min(100, quality_score))
         
-        # Determine category
-        if quality_score < 30:
-            category = "Good"
-        elif quality_score < 60:
-            category = "Moderate"
+        # Determine category (FIXED: High scores = Good quality)
+        if quality_score >= 60:
+            category = "Good"      # High scores = Good (high contrast, sharp, well-lit)
+        elif quality_score >= 30:
+            category = "Moderate"  # Medium scores = Moderate
         else:
-            category = "Bad"
+            category = "Bad"       # Low scores = Bad (blurry, low contrast, dark/bright)
         
         return quality_score, category, 0.001
         
